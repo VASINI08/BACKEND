@@ -1,0 +1,170 @@
+# frontend_portfolio.py
+# This file serves as the Streamlit frontend for the Portfolio Tracker application.
+
+import streamlit as st
+import pandas as pd
+import datetime
+import altair as alt
+from backend import (
+    create_tables, create_asset, get_all_assets,
+    update_asset, delete_asset, get_portfolio_summary,
+    get_asset_allocation, create_transaction, get_all_transactions
+)
+
+# --- Initialize Database and Page ---
+create_tables()
+
+st.set_page_config(
+    page_title="Personal Portfolio Tracker",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+st.title("📈 Personal Portfolio Tracker")
+st.markdown("Monitor your investments and analyze asset allocation.")
+st.markdown("---")
+
+# --- Dashboard Section ---
+st.header("Portfolio Dashboard")
+summary = get_portfolio_summary()
+col1, col2 = st.columns(2)
+
+with col1:
+    st.metric(label="Total Assets", value=f"{summary['total_assets']:,}")
+with col2:
+    st.metric(label="Total Invested", value=f"${summary['total_invested']:,}")
+
+# Asset allocation breakdown
+st.subheader("Asset Allocation")
+allocation_data = get_asset_allocation()
+if allocation_data:
+    df_allocation = pd.DataFrame(allocation_data, columns=["Asset Type", "Total Value"])
+    chart = alt.Chart(df_allocation).mark_arc(outerRadius=120).encode(
+        theta=alt.Theta("Total Value:Q", stack=True),
+        color=alt.Color("Asset Type:N"),
+        tooltip=["Asset Type", "Total Value"]
+    ).properties(title="Portfolio Breakdown by Asset Type")
+    
+    st.altair_chart(chart, use_container_width=True)
+else:
+    st.info("No assets to display. Add new assets below!")
+
+st.markdown("---")
+
+# --- Manage Assets Section ---
+st.header("Manage Assets")
+
+# Form for adding a new asset
+with st.expander("➕ Add New Asset"):
+    with st.form("new_asset_form", clear_on_submit=True):
+        col_a, col_b = st.columns(2)
+        with col_a:
+            ticker = st.text_input("Ticker Symbol", help="e.g., AAPL, BTC, GOOG")
+            asset_type = st.selectbox("Asset Type", ["Equity", "Fixed Income", "Crypto", "Other"])
+        with col_b:
+            shares = st.number_input("Number of Shares", min_value=0.000001, format="%.6f")
+            cost_basis = st.number_input("Cost Basis", min_value=0.01, format="%.2f")
+        
+        purchase_date = st.date_input("Purchase Date", datetime.date.today())
+        
+        submitted = st.form_submit_button("Add Asset")
+        if submitted:
+            if ticker and shares and cost_basis:
+                success, message = create_asset(ticker, asset_type, purchase_date, shares, cost_basis)
+                if success:
+                    st.success(message)
+                    st.rerun()
+                else:
+                    st.error(message)
+            else:
+                st.error("Please fill in all fields.")
+
+# Display all assets
+st.subheader("Your Current Holdings")
+assets_data = get_all_assets()
+if assets_data:
+    df_assets = pd.DataFrame(assets_data, columns=["ID", "Ticker", "Type", "Purchase Date", "Shares", "Cost Basis"])
+    st.dataframe(df_assets, use_container_width=True)
+    
+    # Forms for updating and deleting assets
+    with st.expander("🛠️ Update or Delete Asset"):
+        # We use a selectbox to pick the asset to manage
+        asset_options = {row["Ticker"]: row["ID"] for index, row in df_assets.iterrows()}
+        selected_ticker = st.selectbox("Select Asset to Manage", list(asset_options.keys()))
+        selected_asset_id = asset_options[selected_ticker]
+        
+        selected_asset = df_assets[df_assets["ID"] == selected_asset_id].iloc[0]
+        
+        st.write(f"Editing asset: **{selected_asset['Ticker']}**")
+        
+        with st.form("edit_asset_form"):
+            col_c, col_d = st.columns(2)
+            with col_c:
+                new_ticker = st.text_input("New Ticker Symbol", value=selected_asset['Ticker'])
+                new_asset_type = st.selectbox("New Asset Type", ["Equity", "Fixed Income", "Crypto", "Other"], index=["Equity", "Fixed Income", "Crypto", "Other"].index(selected_asset['Type']))
+            with col_d:
+                new_shares = st.number_input("New Number of Shares", min_value=0.000001, format="%.6f", value=float(selected_asset['Shares']))
+                new_cost_basis = st.number_input("New Cost Basis", min_value=0.01, format="%.2f", value=float(selected_asset['Cost Basis']))
+            
+            new_purchase_date = st.date_input("New Purchase Date", value=selected_asset['Purchase Date'])
+            
+            col_e, col_f = st.columns(2)
+            with col_e:
+                update_submitted = st.form_submit_button("Update Asset")
+            with col_f:
+                delete_submitted = st.form_submit_button("Delete Asset")
+            
+            if update_submitted:
+                success, message = update_asset(selected_asset_id, new_ticker, new_asset_type, new_purchase_date, new_shares, new_cost_basis)
+                if success:
+                    st.success(message)
+                    st.rerun()
+                else:
+                    st.error(message)
+            
+            if delete_submitted:
+                success, message = delete_asset(selected_asset_id)
+                if success:
+                    st.success(message)
+                    st.rerun()
+                else:
+                    st.error(message)
+else:
+    st.info("Start by adding your first asset!")
+
+st.markdown("---")
+
+# --- Transaction Log Section ---
+st.header("Log Transactions")
+assets_for_transaction = get_all_assets()
+if assets_for_transaction:
+    with st.form("new_transaction_form", clear_on_submit=True):
+        col_g, col_h = st.columns(2)
+        with col_g:
+            transaction_asset_id = st.selectbox("Select Asset", options=[(row[1], row[0]) for row in assets_for_transaction], format_func=lambda x: x[0])[1]
+            transaction_type = st.selectbox("Transaction Type", ["Buy", "Sell", "Dividend"])
+        with col_h:
+            amount = st.number_input("Amount", min_value=0.01, format="%.2f")
+            description = st.text_area("Description", "Enter transaction details here...")
+        
+        transaction_date = st.date_input("Transaction Date", datetime.date.today())
+        
+        submitted = st.form_submit_button("Add Transaction")
+        if submitted:
+            success, message = create_transaction(transaction_asset_id, transaction_date, transaction_type, amount, description)
+            if success:
+                st.success(message)
+                st.rerun()
+            else:
+                st.error(message)
+else:
+    st.info("You must add an asset before you can log transactions.")
+
+# Display transaction history
+st.subheader("Transaction History")
+transactions_data = get_all_transactions()
+if transactions_data:
+    df_transactions = pd.DataFrame(transactions_data, columns=["ID", "Ticker", "Date", "Type", "Amount", "Description"])
+    st.dataframe(df_transactions, use_container_width=True)
+else:
+    st.info("No transactions logged yet.")
